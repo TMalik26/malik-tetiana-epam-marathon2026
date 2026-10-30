@@ -5,6 +5,7 @@ using APIHandler.Constants.Orders;
 using APIHandler.Entities;
 using APIHandler.Exceptions;
 using APIHandler.Helpers;
+using APIHandler.Models.GroupReservation;
 using APIHandler.Repositories.Orders;
 using APIHandler.Repositories.Reservations;
 using APIHandler.Services.Dishes;
@@ -84,6 +85,45 @@ public class OrderService : IOrderService
     public async Task<Order?> GetOrderByReservationIdAsync(string reservationId)
     {
         return await _orderRepository.GetOrderByReservationIdAsync(reservationId);
+    }
+
+    public async Task MergeGroupReservationDishesIntoOrderAsync(
+        string reservationId,
+        IReadOnlyCollection<SubmittedDishQuantity> dishes)
+    {
+        foreach (SubmittedDishQuantity submittedDish in dishes)
+        {
+            if (string.IsNullOrWhiteSpace(submittedDish.DishId))
+                throw new ValidationException("Submitted dish ID is required.");
+
+            await _dishService.GetDishByIdAsync(submittedDish.DishId);
+        }
+
+        Order order = await _orderRepository.GetOrderByReservationIdAsync(reservationId)
+            ?? throw new ValidationException($"No order is associated with reservation '{reservationId}'.");
+
+        foreach (SubmittedDishQuantity submittedDish in dishes)
+        {
+            OrderItem? existingDish = order.Dishes.FirstOrDefault(dish =>
+                string.Equals(dish.DishId, submittedDish.DishId, StringComparison.Ordinal));
+
+            if (existingDish is not null)
+            {
+                existingDish.Quantity += submittedDish.Quantity;
+            }
+            else
+            {
+                order.Dishes.Add(new OrderItem
+                {
+                    DishId = submittedDish.DishId,
+                    Quantity = submittedDish.Quantity,
+                    State = OrderItemState.Pending
+                });
+            }
+        }
+
+        order.Status = OrderStatus.SubmittedByCustomer;
+        await _orderRepository.SaveOrderAsync(order);
     }
 
     public async Task AddOrderAsync(Order order)

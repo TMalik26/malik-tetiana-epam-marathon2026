@@ -9,7 +9,10 @@ using APIHandler.Repositories.Reservations;
 using APIHandler.Repositories.Tables;
 using APIHandler.Services.Auth;
 using APIHandler.Services.Locations;
+using APIHandler.Services.Orders;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace APIHandler.Services.GroupReservations;
@@ -20,7 +23,8 @@ public class GroupReservationService(
     IReservationRepository reservationRepository,
     IGuestSessionRepository guestSessionRepository,
     IUserService userService,
-    ILocationService locationService) : IGroupReservationService
+    ILocationService locationService,
+    IOrderService? orderService = null) : IGroupReservationService
 {
     private const string DefaultRestaurantName = "Green & Tasty";
 
@@ -142,5 +146,58 @@ public class GroupReservationService(
 
         return new GetGroupInviteTokenResponse(groupReservation.ReservationToken);
     }
-}
 
+    public async Task<List<SubmittedDishQuantity>> SubmitGroupReservationAsync(
+        string userId,
+        string groupReservationId,
+        string reservationId)
+    {
+        GroupReservation groupReservation = await groupReservationRepository.GetGroupReservationByIdAsync(groupReservationId)
+            ?? throw new GroupReservationNotFoundException();
+
+        if (!string.Equals(groupReservation.ReservationId, reservationId, StringComparison.Ordinal))
+            throw new ValidationException("reservationId does not match the group reservation's parent reservation.");
+
+        Reservation reservation = await reservationRepository.GetReservationByIdAsync(groupReservation.ReservationId)
+            ?? throw new ReservationNotFoundException("Parent reservation not found.");
+
+        if (!string.Equals(reservation.CustomerId, userId, StringComparison.Ordinal))
+            throw new ActionForbiddenException("Only the reservation owner can submit this group reservation.");
+
+        if (groupReservation.Status == GroupReservationStatus.Closed)
+            throw new GroupReservationExpiredException();
+
+        if (groupReservation.Status == GroupReservationStatus.Submitted)
+            throw new GroupReservationSubmittedException();
+
+        var sessions = await guestSessionRepository.GetAllByGroupReservationIdAsync(groupReservation.GroupReservationId);
+        var submittedSessions = sessions
+            .Where(session => session.IsSubmitted &&
+                              string.Equals(session.GroupReservationId, groupReservation.GroupReservationId, StringComparison.Ordinal))
+            .ToList();
+
+        if (submittedSessions.Count == 0)
+            throw new ValidationException("There are no submitted guest sessions for this group reservation.");
+
+        List<SubmittedDishQuantity> aggregate = submittedSessions
+            .SelectMany(session => session.Dishes ?? [])
+            .GroupBy(dish => dish.DishId, StringComparer.Ordinal)
+            .Select(group => new SubmittedDishQuantity(group.Key, group.Sum(dish => dish.Quantity)))
+            .ToList();
+
+        if (aggregate.Count == 0)
+            throw new ValidationException("Submitted guest sessions contain no dishes.");
+
+        if (orderService is null)
+            throw new InvalidOperationException("Order service is not configured.");
+
+        await orderService.MergeGroupReservationDishesIntoOrderAsync(
+            groupReservation.ReservationId,
+            aggregate);
+
+        groupReservation.Status = GroupReservationStatus.Submitted;
+        await groupReservationRepository.SaveGroupReservationAsync(groupReservation);
+
+        return aggregate;
+    }
+}
