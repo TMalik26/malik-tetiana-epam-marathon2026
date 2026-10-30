@@ -1,4 +1,4 @@
-﻿using APIHandler.Entities;
+using APIHandler.Entities;
 using APIHandler.Models.GroupReservation;
 using APIHandler.Models.GuestReservation;
 using System.Collections.Generic;
@@ -16,4 +16,5 @@ public interface IGroupReservationService
     Task CreateGroupReservationIfDoesNotExistAsync(string userId, string reservationId);
     Task CloseGroupReservationAsync(string reservationId);
     Task<GetGroupInviteTokenResponse> GetGroupReservationInviteTokenAsync(string reservationId);
+    Task<List<SubmittedDishQuantity>> SubmitGroupReservationAsync(string userId, string groupReservationId, string reservationId);
 }

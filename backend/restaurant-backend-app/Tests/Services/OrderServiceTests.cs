@@ -5,6 +5,7 @@ using APIHandler.Constants.Dishes;
 using APIHandler.Constants.Orders;
 using APIHandler.Entities;
 using APIHandler.Exceptions;
+using APIHandler.Models.GroupReservation;
 using APIHandler.Repositories.Orders;
 using APIHandler.Repositories.Reservations;
 using APIHandler.Services.Dishes;
@@ -612,6 +613,134 @@ public class OrderServiceTests
         await Assert.ThrowsAsync<ValidationException>(() =>
             _orderService.UnSubmitPreOrderAsync("cust-1", reservationId, _mockLambdaContext.Object));
     }
+
+    [Fact]
+    public async Task MergeGroupReservationDishesIntoOrderAsync_AddsQuantitiesToExistingLinesAndAddsNewPendingLines()
+    {
+        var reservationId = "reservation-id";
+        var order = CreateOrder(reservationId,
+            new OrderItem { DishId = "existing-dish", Quantity = 2, State = OrderItemState.Confirmed });
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("existing-dish"))
+            .ReturnsAsync(new Dish { Id = "existing-dish" });
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("new-dish"))
+            .ReturnsAsync(new Dish { Id = "new-dish" });
+        _mockOrderRepository
+            .Setup(repository => repository.GetOrderByReservationIdAsync(reservationId))
+            .ReturnsAsync(order);
+
+        await _orderService.MergeGroupReservationDishesIntoOrderAsync(
+            reservationId,
+            new[]
+            {
+                new SubmittedDishQuantity("existing-dish", 3),
+                new SubmittedDishQuantity("new-dish", 1)
+            });
+
+        Assert.Equal(2, order.Dishes.Count);
+        Assert.Equal(5, order.Dishes.Single(dish => dish.DishId == "existing-dish").Quantity);
+        Assert.Equal(OrderItemState.Confirmed, order.Dishes.Single(dish => dish.DishId == "existing-dish").State);
+        Assert.Equal(1, order.Dishes.Single(dish => dish.DishId == "new-dish").Quantity);
+        Assert.Equal(OrderItemState.Pending, order.Dishes.Single(dish => dish.DishId == "new-dish").State);
+        Assert.Equal(OrderStatus.SubmittedByCustomer, order.Status);
+        _mockOrderRepository.Verify(repository => repository.SaveOrderAsync(order), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergeGroupReservationDishesIntoOrderAsync_CharacterizationOfCurrentBehavior_MatchingCanceledLineKeepsCanceledStateAndAddsQuantity()
+    {
+        var reservationId = "reservation-id";
+        var canceledLine = new OrderItem
+        {
+            DishId = "canceled-dish",
+            Quantity = 1,
+            State = OrderItemState.Canceled
+        };
+        var order = CreateOrder(reservationId, canceledLine);
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("canceled-dish"))
+            .ReturnsAsync(new Dish { Id = "canceled-dish" });
+        _mockOrderRepository
+            .Setup(repository => repository.GetOrderByReservationIdAsync(reservationId))
+            .ReturnsAsync(order);
+
+        await _orderService.MergeGroupReservationDishesIntoOrderAsync(
+            reservationId,
+            new[] { new SubmittedDishQuantity("canceled-dish", 2) });
+
+        Assert.Single(order.Dishes);
+        Assert.Equal(3, canceledLine.Quantity);
+        Assert.Equal(OrderItemState.Canceled, canceledLine.State);
+        _mockOrderRepository.Verify(repository => repository.SaveOrderAsync(order), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergeGroupReservationDishesIntoOrderAsync_MissingOrderThrowsValidationWithoutSaving()
+    {
+        const string reservationId = "reservation-id";
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("dish-1"))
+            .ReturnsAsync(new Dish { Id = "dish-1" });
+        _mockOrderRepository
+            .Setup(repository => repository.GetOrderByReservationIdAsync(reservationId))
+            .ReturnsAsync((Order?)null);
+
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            _orderService.MergeGroupReservationDishesIntoOrderAsync(
+                reservationId, new[] { new SubmittedDishQuantity("dish-1", 1) }));
+
+        _mockOrderRepository.Verify(repository => repository.SaveOrderAsync(It.IsAny<Order>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MergeGroupReservationDishesIntoOrderAsync_NonexistentDishThrowsWithoutLoadingOrSavingOrder()
+    {
+        const string reservationId = "reservation-id";
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("missing-dish"))
+            .ThrowsAsync(new ValidationException("Dish with ID missing-dish not found."));
+
+        await Assert.ThrowsAsync<ValidationException>(() =>
+            _orderService.MergeGroupReservationDishesIntoOrderAsync(
+                reservationId, new[] { new SubmittedDishQuantity("missing-dish", 1) }));
+
+        _mockOrderRepository.Verify(
+            repository => repository.GetOrderByReservationIdAsync(It.IsAny<string>()), Times.Never);
+        _mockOrderRepository.Verify(repository => repository.SaveOrderAsync(It.IsAny<Order>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MergeGroupReservationDishesIntoOrderAsync_CharacterizationOfCurrentBehavior_ExistingUnavailableDishIsMerged()
+    {
+        const string reservationId = "reservation-id";
+        var order = CreateOrder(reservationId);
+        _mockDishService
+            .Setup(service => service.GetDishByIdAsync("unavailable-dish"))
+            .ReturnsAsync(new Dish { Id = "unavailable-dish", State = DishState.OutOfStock });
+        _mockOrderRepository
+            .Setup(repository => repository.GetOrderByReservationIdAsync(reservationId))
+            .ReturnsAsync(order);
+
+        await _orderService.MergeGroupReservationDishesIntoOrderAsync(
+            reservationId, new[] { new SubmittedDishQuantity("unavailable-dish", 1) });
+
+        Assert.Contains(order.Dishes, dish =>
+            dish.DishId == "unavailable-dish" && dish.Quantity == 1 && dish.State == OrderItemState.Pending);
+        _mockOrderRepository.Verify(repository => repository.SaveOrderAsync(order), Times.Once);
+    }
+
+    private static Order CreateOrder(string reservationId, params OrderItem[] dishes) =>
+        new()
+        {
+            OrderId = "order-id",
+            CustomerId = "customer-id",
+            ReservationId = reservationId,
+            ReservationAddress = "address",
+            ReservationTime = "time",
+            Dishes = dishes.ToList(),
+            Status = OrderStatus.Created
+        };
 
     [Theory]
     [AutoData]
