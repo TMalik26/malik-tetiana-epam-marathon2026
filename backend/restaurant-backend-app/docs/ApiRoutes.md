@@ -1229,9 +1229,31 @@ Response: 200 OK
 ```
 
 ### `DELETE` /guest/groups/{groupReservationId}/sessions/{guestSessionId}
+Owner-only. Requires a Cognito-authenticated user who owns the parent reservation. On success, returns the updated group-session snapshot in the same format as `GET /guest/groups/{groupReservationId}/sessions`.
+
 Response: 200 OK
 ```json
 {
-  "message": "Guest session removed from group successfully."
+  "participants": [
+    {
+      "id": "session-123",
+      "type": "Owner",
+      "name": "Jane",
+      "items": [
+        {
+          "dish": {
+            "id": "dish-456",
+            "name": "Pasta",
+            "price": 12.50
+          },
+          "quantity": 2
+        }
+      ],
+      "total": 25.00,
+      "isSubmitted": false
+    }
+  ],
+  "total": 25.00
 }
 ```
+Returns `400 Bad Request` when a required path parameter is missing or the session does not belong to the specified group; `401 Unauthorized` when the Cognito identity is missing; `403 Forbidden` when the caller does not own the reservation; `404 Not Found` when the group reservation, parent reservation, or guest session does not exist; and `409 Conflict` when a dish in a remaining session is no longer available.
