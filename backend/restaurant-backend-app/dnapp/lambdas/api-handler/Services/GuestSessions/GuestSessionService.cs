@@ -41,6 +41,7 @@ public class GuestSessionService(
         return guestSession.Id == guestSessionId;
     }
 
+
     public async Task<CreatGuestSessionResponse> CreateGuestSessionAsync(CreateGuestSessionRequest request)
     {
         GroupReservation group = await GetGroupReservationAndValidateAsync(request.GroupReservationId);
@@ -231,6 +232,32 @@ public class GuestSessionService(
         return new GetGroupSessionsResponse(participants, participants.Sum(participant => participant.Total));
     }
 
+    public async Task<string> GetOwnerGuestSessionIdAsync(string userId, string reservationId)
+    {
+        var reservation = await reservationRepository.GetReservationByIdAsync(reservationId)
+            ?? throw new ReservationNotFoundException("Reservation was not found.");
+
+        if (!string.Equals(reservation.CustomerId, userId, StringComparison.Ordinal))
+            throw new ActionForbiddenException("Forbidden: You do not own this reservation.");
+
+        var groupReservation = await groupReservationRepository.GetByReservationIdAsync(reservationId)
+            ?? throw new GroupReservationNotFoundException();
+
+        var ownerSessions = (await guestSessionRepository.GetAllByGroupReservationIdAsync(groupReservation.GroupReservationId))
+            .Where(session => string.Equals(session.GroupReservationId, groupReservation.GroupReservationId, StringComparison.Ordinal) &&
+                              session.IsOwnerSession &&
+                              string.Equals(session.OwnerUserId, reservation.CustomerId, StringComparison.Ordinal))
+            .ToList();
+
+        if (ownerSessions.Count == 0)
+            throw new GuestSessionNotFoundException("Owner guest session was not found.");
+
+        if (ownerSessions.Count > 1)
+            throw new DuplicateOwnerGuestSessionsException("Multiple owner guest sessions were found for this reservation.");
+
+        return ownerSessions[0].Id;
+    }
+
     public async Task<GetAllSessionsResponse> DeleteGuestSessionAsync(string userId, string groupReservationId, string guestSessionId)
     {
         await ValidateReservationOwnerAsync(groupReservationId, userId);
@@ -416,5 +443,3 @@ public class GuestSessionService(
     }
 
 }
-
-

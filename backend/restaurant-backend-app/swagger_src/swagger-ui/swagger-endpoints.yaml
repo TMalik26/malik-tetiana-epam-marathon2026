@@ -157,12 +157,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /guest/groups/{groupReservationId}/submit:
+  /group-reservations/{groupReservationId}/submit:
     post:
       tags:
         - Group Reservations
       summary: Submit group pre-order
-      description: Submits the pre-order for a group reservation, converting guest sessions to orders
+      description: Merges submitted guest-session quantities into the order associated with the parent reservation. Every aggregated dish ID must still exist; missing or blank dish IDs are rejected without changing the order or group status. Requires the authenticated reservation owner.
       operationId: submitGroupPreOrder
       parameters:
         - name: groupReservationId
@@ -171,6 +171,8 @@ paths:
           description: The ID of the group reservation
           schema:
             type: string
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -179,16 +181,33 @@ paths:
               $ref: '#/components/schemas/SubmitGroupPreOrderRequest'
       responses:
         '200':
-          description: Group pre-order submitted successfully
+          description: Aggregated submitted dish quantities
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  type: object
-                  description: Enriched dishes data
+                  $ref: '#/components/schemas/SubmittedDishQuantity'
         '400':
-          description: Invalid request - missing parameters or validation error
+          description: Invalid request, missing or blank dish ID, reservation ID mismatch, group already submitted, no submitted dishes, or no associated order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing authenticated Cognito identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The authenticated caller does not own the parent reservation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Group reservation or parent reservation not found
           content:
             application/json:
               schema:
@@ -496,7 +515,7 @@ paths:
       tags:
         - Guest Sessions
       summary: Get owner's guest session ID
-      description: Retrieves the guest session ID for the reservation owner
+      description: Returns the persisted guest session ID only when exactly one owner session for the reservation belongs to the authenticated reservation owner. This endpoint does not create a session.
       operationId: getOwnerSessionId
       parameters:
         - name: reservationId
@@ -521,7 +540,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Reservation not found
+          description: Reservation, related group reservation, or owner guest session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing authenticated Cognito identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: The authenticated caller does not own the reservation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Multiple owner guest sessions match the reservation owner
           content:
             application/json:
               schema:
@@ -584,6 +621,17 @@ components:
           type: string
           description: The ID of the reservation (owner of the group)
           example: res-123
+
+    SubmittedDishQuantity:
+      type: object
+      required: [dishId, quantity]
+      properties:
+        dishId:
+          type: string
+          example: dish-123
+        quantity:
+          type: integer
+          example: 2
 
     GroupReservationStatusResponse:
       type: object

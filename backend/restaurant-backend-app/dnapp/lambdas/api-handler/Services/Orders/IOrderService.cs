@@ -1,5 +1,6 @@
 using Amazon.Lambda.Core;
 using APIHandler.Entities;
+using APIHandler.Models.GroupReservation;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -28,4 +29,8 @@ public interface IOrderService
     Task SubmitPreOrderAsync(string customerId, string reservationId, ILambdaContext context);
 
     Task UnSubmitPreOrderAsync(string customerId, string reservationId, ILambdaContext context);
+
+    Task MergeGroupReservationDishesIntoOrderAsync(
+        string reservationId,
+        IReadOnlyCollection<SubmittedDishQuantity> dishes);
 }

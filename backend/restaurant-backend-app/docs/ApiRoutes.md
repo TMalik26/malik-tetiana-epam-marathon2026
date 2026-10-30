@@ -561,7 +561,7 @@ Response: `200 OK`
   "guestSessionId": "string"
 }
 ```
-
+Requires Cognito authentication and reservation ownership. Returns `401 Unauthorized` when the caller identity is missing, `403 Forbidden` when the caller does not own the reservation, `404 Not Found` when the reservation, related group reservation, or owner session is missing, and `409 Conflict` if multiple owner sessions match.
 
 ### `DELETE` /reservations
 Request body:
@@ -1180,12 +1180,23 @@ Response: 200 OK
 ```
 
 ### `POST` /group-reservations/{groupReservationId}/submit
-Response: 200 OK
+Requires Cognito authentication. Request body:
 ```json
 {
-  "message": "Group reservation pre-order submitted successfully."
+  "reservationId": "string"
 }
 ```
+
+Response: 200 OK
+```json
+[
+  {
+    "dishId": "string",
+    "quantity": 2
+  }
+]
+```
+The submitted carts from this group are merged into the order associated with the parent reservation. Every aggregated dish ID must still exist when submitted; missing or blank dish IDs return `400 Bad Request` without changing the order or group status. Returns `400 Bad Request` for invalid input, a reservation ID mismatch, a previously submitted group, empty submissions, or a missing associated order; `401 Unauthorized` when the Cognito `sub` claim is missing; `403 Forbidden` when the caller does not own the parent reservation; and `404 Not Found` when the group reservation or parent reservation does not exist.
 
 ### `GET` /guest/groups/{groupReservationId}/sessions
 
